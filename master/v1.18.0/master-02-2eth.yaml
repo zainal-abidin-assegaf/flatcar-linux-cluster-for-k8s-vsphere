@@ -1,0 +1,2260 @@
+#cloud-config
+
+passwd:
+  users:
+    - name: admin
+      ssh_authorized_keys:
+        - "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA8PF9Cj1svhd8Cb+yFrw9GHA+6j6sq1halwXrVx+m+F49xMrCKV0zpdVJGwEb13U3WDaibhPPHy5dWCeVj7ZxSLDdo510p1NFAMicmWF9CNJ1oQF+uRu8IobaJxrlW00+rYJ4EjRLbFQf3X4OhCkjDcF3KS/uhmpX2niMj5ffcWN4PlglDaahA3YZXEG8BFQxJgmaOgJSq6M34wqTFdhBCC1beQPPtwDE0N4NYNS3lhl8n3Fe84m59DtD+O6xD2EL6II5fkfMqeFYmgi8M9f/kMSCdAWHtaahAFBNSILh5jOiY+OIYL7DSL4sbyjUa7vPGHaXKhfVfiZID0mwyr8Uzw== cent@centos-vm"
+      groups:
+        - "sudo"
+        - "docker"
+
+etcd:
+  version: 3.4.5
+  client_cert_auth:            true
+  peer_client_cert_auth:       true
+  trusted_ca_file:             /etc/ssl/certs/ca.pem
+  peer_trusted_ca_file:        /etc/ssl/certs/ca.pem
+  cert_file:                   /var/lib/etcd/ssl/etcd-node.pem
+  key_file:                    /var/lib/etcd/ssl/etcd-node-key.pem
+  peer_cert_file:              /var/lib/etcd/ssl/etcd-node.pem
+  peer_key_file:               /var/lib/etcd/ssl/etcd-node-key.pem
+  advertise_client_urls:       "https://10.9.56.102:2379"
+  initial_advertise_peer_urls: "https://10.9.56.102:2380"
+  listen_client_urls:          "https://0.0.0.0:2379"
+  listen_peer_urls:            "https://10.9.56.102:2380"
+  initial_cluster:             manager-01=https://10.9.56.101:2380,manager-02=https://10.9.56.102:2380,manager-03=https://10.9.56.103:2380
+  initial_cluster_token:       k8s_etcd
+  initial_cluster_state:       new
+  auto_compaction_retention:   1
+flannel:
+  etcd_cafile:    /etc/ssl/certs/ca.pem
+  etcd_certfile:  /var/lib/etcd/ssl/etcd-node.pem
+  etcd_keyfile:   /var/lib/etcd/ssl/etcd-node-key.pem
+  version:        0.12.0
+  etcd_prefix:    "/coreos.com/network2"
+  etcd_endpoints: "https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+  interface:      ens32
+locksmith:
+  etcd_cafile:     /etc/ssl/certs/ca.pem
+  etcd_certfile:   /var/lib/etcd/ssl/etcd-node.pem
+  etcd_keyfile:    /var/lib/etcd/ssl/etcd-node-key.pem
+  reboot_strategy: "off"
+  etcd_endpoints:  "https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+systemd:
+  units:
+     - name: "settimezone.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Set the time zone
+         [Service]
+         ExecStart=/usr/bin/timedatectl set-timezone Asia/Jakarta
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: systemd-timesyncd.service
+       mask: true
+     - name: ntpd.service
+       enable: true
+     - name: "locksmithd.service"
+       enable: true
+       dropins:
+        - name: "20-locksmithd-config.conf"
+          contents: |
+            [Service]
+            Environment="LOCKSMITHD_ETCD_CAFILE=/etc/ssl/certs/ca.pem"
+            Environment="LOCKSMITHD_ETCD_CERTFILE=/var/lib/etcd/ssl/etcd-node.pem"
+            Environment="LOCKSMITHD_ETCD_KEYFILE=/var/lib/etcd/ssl/etcd-node-key.pem"
+            Environment="LOCKSMITHD_ENDPOINT=https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+        - name: 40-etcd-lock.conf
+          contents: |
+            [Service]
+            Environment="REBOOT_STRATEGY=off"
+     - name: "etcd-member.service"
+       enable: true
+       dropins:
+        - name: conf1.conf
+          contents: |
+            [Service]
+            EnvironmentFile=/etc/flannel/options.env
+        - name: "20-cl-etcd-member.conf"
+          contents: |
+            [Service]
+            Environment="ETCD_NAME=manager-02"
+            Environment="ETCD_DATA_DIR=/var/lib/etcd"
+            Environment="ETCD_ENABLE_V2=true"
+            Environment="ETCD_OPTS=--trusted-ca-file /etc/ssl/certs/ca.pem \
+               --cert-file /var/lib/etcd/ssl/etcd-node.pem \
+               --key-file /var/lib/etcd/ssl/etcd-node-key.pem \
+               --peer-trusted-ca-file /etc/ssl/certs/ca.pem \
+               --peer-cert-file /var/lib/etcd/ssl/etcd-node.pem \
+               --peer-key-file /var/lib/etcd/ssl/etcd-node-key.pem \
+               --client-cert-auth \
+               --peer-client-cert-auth \
+               --listen-client-urls https://0.0.0.0:2379 \
+               --advertise-client-urls https://10.9.56.102:2379 \
+               --listen-peer-urls https://10.9.56.102:2380 \
+               --initial-advertise-peer-urls https://10.9.56.102:2380 \
+               --log-level info \
+               --logger zap \
+               --log-outputs stderr \
+               --auto-compaction-retention 1"
+     - name: "grpc-proxy-0.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=grpc-0
+         Requires=etcd-v3-datastore.service
+         After=etcd-v3-datastore.service
+         [Service]
+         Type=notify
+         Restart=always
+         RestartSec=5s
+         Environment="ETCD_IMAGE_TAG=v3.4.5"
+         Environment="ETCD_USER=etcd"
+         Environment="ETCD_DATA_DIR=/var/lib/etcd"
+         ExecStart=/usr/lib/coreos/etcd-wrapper grpc-proxy start --listen-addr=10.9.56.102:23790 \
+           --endpoints=https://10.9.56.102:2379 \
+           --advertise-client-url=10.9.56.102:23790 \
+           --resolver-prefix=https://10.9.56.102:2379 \
+           --resolver-ttl=60 \
+           --namespace=manager-02
+         [Install]
+         WantedBy=multi-user.target
+     - name: "grpc-proxy-1.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=grpc-1
+         Requires=etcd-v3-datastore.service 
+         After=etcd-v3-datastore.service
+         [Service]
+         Type=notify
+         Restart=always
+         RestartSec=5s
+         Environment="ETCD_IMAGE_TAG=v3.4.5"
+         Environment="ETCD_USER=etcd"
+         Environment="ETCD_DATA_DIR=/var/lib/etcd"
+         ExecStart=/usr/lib/coreos/etcd-wrapper grpc-proxy start --listen-addr=10.9.56.102:23791 \
+           --endpoints=https://10.9.56.102:2379 \
+           --advertise-client-url=10.9.56.102:23791 \
+           --resolver-prefix=https://10.9.56.102:2379 \
+           --resolver-ttl=60 \
+           --namespace=manager-02
+         [Install]
+         WantedBy=multi-user.target
+     - name: "etcd-v3-datastore.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Choose etcd v3 datastore
+         After=etcd-member.service
+         Requires=etcd-member.service
+         [Service]
+         ExecStart=/etc/profile.d/etcdctl.sh
+         RemainAfterExit=yes
+         Type=oneshot
+     - name: "locksmith-profile.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=locksmith profile
+         [Service]
+         ExecStart=/etc/profile.d/locksmithctl.sh
+         RemainAfterExit=yes
+         Type=oneshot
+     - name: "rpcbind.service"
+       enable: true
+     - name: "rpc-statd.service"
+       enable: true
+     - name: "flanneld.service"
+       enable: true
+       dropins:
+         - name: "50-ssl.conf"
+           contents: |
+             [Unit]
+             Description=Flannel etcd ssl dir
+             Requires=etcd-member.service etcd-v3-datastore.service
+             After=etcd-member.service etcd-v3-datastore.service
+             [Service]
+             Environment="ETCD_SSL_DIR=/var/lib/etcd/ssl"
+         - name: "50-network-config.conf"
+           contents: |
+             [Unit]
+             Description=Flannel networking vxlan
+             Requires=etcd-member.service etcd-v3-datastore.service
+             After=etcd-member.service etcd-v3-datastore.service
+             [Service]
+             Environment="FLANNEL_IMAGE_TAG=v0.12.0-amd64"
+             Environment="FLANNEL_IMAGE_URL=quay.io/coreos/flannel"
+             Environment="FLANNEL_ETCD=https://10.9.56.102:2379"
+             Environment="FLANNEL_ETCD_KEY=/coreos.com/network2"
+             ExecStartPre=ETCDCTL_API=2 /usr/bin/etcdctl --ca-file=/etc/ssl/certs/ca.pem --cert-file=/var/lib/etcd/ssl/etcd-node.pem --key-file=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" set /coreos.com/network2/config '{ "Network":"10.244.0.0/16", "SubnetLen": 24, "SubnetMin": "10.244.0.0", "SubnetMax":"10.244.255.0", "Backend": {"Type": "vxlan"} }'
+             
+     - name: "docker-tcp.socket"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Docker Socket for the API
+         [Socket]
+         ListenStream=2375
+         Service=docker.service
+         BindIPv6Only=both
+         [Install]
+         WantedBy=sockets.target
+     - name: "dns.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=storytel/dnsmasq
+         Requires=docker.service
+         After=docker.service
+         [Service]
+         Restart=always
+         ExecStartPre=-/usr/bin/docker rm dnsmasq
+         ExecStart=/usr/bin/docker run --name dnsmasq --net=host \
+           -v /etc/dnsmasq:/etc/dnsmasq \
+           --cap-add=NET_ADMIN \
+           storytel/dnsmasq
+         ExecStop=-/usr/bin/docker stop dnsmasq
+         ExecStopPost=-/usr/bin/docker rm dnsmasq
+         [Install]
+         WantedBy=multi-user.target
+     - name: "timer-hourly-config.timer"
+       enable: true
+       contents: |
+         [Unit]
+         Description=2 minutes timer (120 seconds)
+         [Timer]
+         # Time to wait after booting before we run first time
+         OnBootSec=5min
+         # Time between running each consecutive time
+         OnUnitActiveSec=2min
+         Unit=timer-hourly-config.target
+         [Install]
+         WantedBy=basic.target
+     - name: "timer-hourly-config.target"
+       enable: true
+       contents: |
+         [Unit]
+         Description=2 minutes timer (120 seconds)
+         StopWhenUnneeded=yes
+     - name: "kubectl-config.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Installs cni tools
+         Wants=timer-hourly-config.timer
+         [Service]
+         ExecStart=sudo /opt/bin/scripts/kubectl-config.sh
+         [Install]
+         WantedBy=timer-hourly-config.target
+     - name: "timer-hourly-octant.timer"
+       enable: true
+       contents: |
+         [Unit]
+         Description=60 minutes timer (3600 seconds)
+         [Timer]
+         # Time to wait after booting before we run first time
+         OnBootSec=5min
+         # Time between running each consecutive time
+         OnUnitActiveSec=60min
+         Unit=timer-hourly-octant.target
+         [Install]
+         WantedBy=basic.target
+     - name: "timer-hourly-octant.target"
+       enable: true
+       contents: |
+         [Unit]
+         Description=60 minutes timer (3600 seconds)
+         StopWhenUnneeded=yes
+     - name: "refresh-octant.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Installs cni tools
+         Wants=timer-hourly-octant.timer
+         [Service]
+         ExecStart=sudo /opt/bin/scripts/refresh-octant.sh
+         [Install]
+         WantedBy=timer-hourly-octant.target
+     - name: "timer-hourly-pvc-released.timer"
+       enable: true
+       contents: |
+         [Unit]
+         Description=60 minutes timer (3600 seconds)
+         [Timer]
+         # Time to wait after booting before we run first time
+         OnBootSec=5min
+         # Time between running each consecutive time
+         OnUnitActiveSec=60min
+         Unit=timer-hourly-pvc-released.target
+         [Install]
+         WantedBy=basic.target
+     - name: "timer-hourly-pvc-released.target"
+       enable: true
+       contents: |
+         [Unit]
+         Description=60 minutes timer (3600 seconds)
+         StopWhenUnneeded=yes
+     - name: "refresh-pvc-released.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Installs cni tools
+         Wants=timer-hourly-pvc-released.timer
+         [Service]
+         ExecStart=sudo /opt/bin/collecting-pvc-released.sh
+         ExecStartPre=sudo /opt/bin/deleting-pvc-released.sh
+         [Install]
+         WantedBy=timer-hourly-pvc-released.target
+     - name: "vmware-tools.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=VMWare Tools
+         Requires=docker.service
+         After=docker.service
+         [Service]
+         Restart=always
+         ExecStartPre=-/usr/bin/docker rm vmware-tools
+         ExecStart=/usr/bin/docker run --net=host --privileged --name vmware-tools sergeyzh/vmware-tools
+         ExecStop=-/usr/bin/docker stop vmware-tools
+         ExecStopPost=-/usr/bin/docker rm vmware-tools
+         [Install]
+         WantedBy=multi-user.target
+     - name: "setup-network-environment.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Setup Network Environment
+         Documentation=http://github.com/kelseyhightower/setup-network-environment
+         Requires=network-online.target cni-install.service
+         After=network-online.target cni-install.service
+         [Service]
+         ExecStart=/opt/bin/setup-network-environment
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "kube-apiserver.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Kubernetes API Server
+         Documentation=https://github.com/kubernetes/kubernetes
+         Requires=setup-network-environment.service etcd-member.service docker.service flanneld.service
+         After=setup-network-environment.service etcd-member.service docker.service flanneld.service
+         [Service]
+         EnvironmentFile=/etc/network-environment
+         ExecStart=/opt/bin/kube-apiserver \
+           --anonymous-auth="false" \
+           --enable-bootstrap-token-auth="true" \
+           --enable-admission-plugins=NamespaceLifecycle,LimitRanger,ServiceAccount,ResourceQuota,DefaultStorageClass \
+           --client-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --service-account-key-file="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --tls-private-key-file="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --tls-cert-file="/etc/kubernetes/ssl/etcd-node.pem" \
+           --etcd-cafile="/etc/kubernetes/ssl/ca.pem" \
+           --etcd-certfile="/etc/kubernetes/ssl/etcd-node.pem" \
+           --etcd-keyfile="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --kubelet-certificate-authority="/etc/kubernetes/ssl/ca.pem" \
+           --kubelet-client-certificate="/etc/kubernetes/ssl/etcd-node.pem" \
+           --kubelet-client-key="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --proxy-client-cert-file="/etc/kubernetes/ssl/etcd-node.pem" \
+           --proxy-client-key-file="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --requestheader-client-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --cert-dir="/etc/kubernetes/ssl" \
+           --kubelet-https="true" \
+           --service-cluster-ip-range=10.100.0.0/16 \
+           --service-node-port-range=30000-32767 \
+           --etcd-servers=https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379 \
+           --advertise-address=10.9.56.102 \
+           --allow-privileged="true" \
+           --apiserver-count=3 \
+           --audit-log-maxage=30 \
+           --audit-log-maxbackup=3 \
+           --audit-log-maxsize=100 \
+           --audit-log-path="/var/log/audit.log" \
+           --authorization-mode=Node,RBAC \
+           --bind-address=0.0.0.0 \
+           --storage-backend="etcd3" \
+           --storage-media-type="application/vnd.kubernetes.protobuf" \
+           --event-ttl=1h \
+           --secure-port=6443 \
+           --logtostderr="true" \
+           --runtime-config=api/all=true \
+           --v=3
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "kube-controller-manager.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Kubernetes Controller Manager
+         Documentation=https://github.com/kubernetes/kubernetes
+         Requires=setup-network-environment.service
+         After=setup-network-environment.service
+         [Service]
+         EnvironmentFile=/etc/network-environment
+         ExecStart=/opt/bin/kube-controller-manager \
+           --controllers=*,bootstrapsigner,tokencleaner \
+           --allocate-node-cidrs="true" \
+           --client-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --service-account-private-key-file="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --requestheader-client-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --root-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --tls-cert-file="/etc/kubernetes/ssl/ca.pem" \
+           --tls-private-key-file="/etc/kubernetes/ssl/ca-key.pem" \
+           --cluster-signing-cert-file="/etc/kubernetes/ssl/ca.pem" \
+           --cluster-signing-key-file="/etc/kubernetes/ssl/ca-key.pem" \
+           --cert-dir="/etc/kubernetes/ssl" \
+           --authentication-kubeconfig="/etc/kubernetes/ssl/kubeconfig-kube-controller-manager.yaml" \
+           --authorization-kubeconfig="/etc/kubernetes/ssl/kubeconfig-kube-controller-manager.yaml" \
+           --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kube-controller-manager.yaml" \
+           --bind-address=0.0.0.0 \
+           --service-cluster-ip-range=10.100.0.0/16 \
+           --master=https://10.9.56.102:6443 \
+           --cluster-cidr=10.244.0.0/17 \
+           --cluster-name="kubernetes-the-hard-way" \
+           --use-service-account-credentials="true" \
+           --leader-elect="true" \
+           --logtostderr="true" \
+           --v=3
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "kube-scheduler.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Kubernetes Scheduler
+         Documentation=https://github.com/kubernetes/kubernetes
+         Requires=setup-network-environment.service
+         After=setup-network-environment.service
+         [Service]
+         EnvironmentFile=/etc/network-environment
+         ExecStart=/opt/bin/kube-scheduler \
+           --client-ca-file="/etc/kubernetes/ssl/ca.pem" \
+           --tls-cert-file="/etc/kubernetes/ssl/etcd-node.pem" \
+           --tls-private-key-file="/etc/kubernetes/ssl/etcd-node-key.pem" \
+           --cert-dir="/etc/kubernetes/ssl" \
+           --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kube-scheduler.yaml" \
+           --master=https://10.9.56.102:6443 \
+           --config="/var/lib/kube-scheduler/kube-scheduler.yaml" \
+           --write-config-to="/etc/kube-scheduler.service.conf" \
+           --logtostderr=true \
+           --v=3
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "kube-proxy.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Kubernetes Proxy
+         Documentation=https://github.com/kubernetes/kubernetes
+         Requires=setup-network-environment.service
+         After=setup-network-environment.service
+         [Service]
+         # wait for kubernetes master to be up and ready
+         ExecStart=/opt/bin/kube-proxy \
+           --config="/var/lib/kubeproxy/kube-proxy-config.yaml" \
+           --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kube-proxy-master.yaml" \
+           --hostname-override=manager-02.example.com \
+           --bind-address=0.0.0.0 \
+           --cluster-cidr=10.244.0.0/17 \
+           --master=https://10.9.56.102:6443 \
+           --proxy-mode="ipvs" \
+           --masquerade-all \
+           --logtostderr="true" \
+           --v=3
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "kube-kubelet.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Kubernetes Kubelet
+         Documentation=https://github.com/kubernetes/kubernetes
+         Requires=setup-network-environment.service
+         After=setup-network-environment.service
+         [Service]
+         Environment=no_proxy=localhost,127.0.0.0/8,127.0.0.1,::1,10.9.56.101,10.9.56.102,10.9.56.103,manager-01,manager-02,manager-03,manager-01.example.com,manager-02.example.com,manager-03.example.com,example.com,/var/run/docker.sock
+         EnvironmentFile=/etc/network-environment
+         # wait for kubernetes master to be up and ready
+         ExecStart=/opt/bin/kubelet \
+           --bootstrap-kubeconfig="/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml" \
+           --hostname-override=manager-02.example.com \
+           --kubeconfig="/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml" \
+           --config="/var/lib/kubelet/kubelet-config.yaml" \
+           --cert-dir="/etc/kubernetes/ssl" \
+           --volume-plugin-dir="/etc/kubernetes/kubelet-plugins/volume/exec" \
+           --image-pull-progress-deadline=2m \
+           --lock-file="/var/run/lock/kubelet.lock" \
+           --exit-on-lock-contention \
+           --logtostderr="true" \
+           --register-node="true" \
+           --node-labels="label=master" \
+           --v=3
+         Restart=on-failure
+         RestartSec=5
+         [Install]
+         WantedBy=multi-user.target
+     - name: "portainer.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=portainer
+         Requires=docker.service
+         After=docker.service
+         [Service]
+         Restart=always
+         ExecStartPre=-/usr/bin/docker rm portainer
+         ExecStart=/usr/bin/docker run --net=host --privileged \
+           -v /var/run/docker.sock:/var/run/docker.sock \
+           -v /etc/portainer/data:/data \
+           --name portainer portainer/portainer
+         ExecStop=-/usr/bin/docker stop portainer
+         ExecStopPost=-/usr/bin/docker rm portainer
+         [Install]
+         WantedBy=multi-user.target
+     - name: "snmpd.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=snmpd
+         Requires=docker.service
+         After=docker.service
+         [Service]
+         Restart=always
+         ExecStartPre=-/usr/bin/docker rm snmpd
+         ExecStart=/usr/bin/docker run --privileged \
+           -v /etc/snmpd.conf:/etc/snmp/snmpd.conf \
+           -v /proc:/host_proc \
+           -p 161:161/udp \
+           --name snmpd really/snmpd
+         ExecStop=-/usr/bin/docker stop snmpd
+         ExecStopPost=-/usr/bin/docker rm snmpd
+         [Install]
+         WantedBy=multi-user.target
+     - name: "vmware-octant.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=vmware octant
+         [Service]
+         ExecStart=sudo /opt/bin/octant
+         Restart=on-failure
+         RestartSec=10
+         [Install]
+         WantedBy=multi-user.target
+     - name: "cni-install.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Installs cni tools
+         [Service]
+         ExecStart=/opt/bin/cni-install.sh
+         RemainAfterExit=yes
+         Type=oneshot
+     - name: "ETCDCTL_APIv2.service"
+       enable: true
+       contents: |
+         [Unit]
+         Description=Installs flannel key
+         [Service]
+         ExecStart=/opt/bin/ETCDCTL_APIv2.sh
+         RemainAfterExit=yes
+         Type=oneshot
+update:
+    reboot-strategy: "off"
+    group: "stable"
+    server: "https://public.update.flatcar-linux.net/v1/update/"
+networkd:
+  units:
+     - name: "00-eth0.network"
+       contents: |
+         [Match]
+         Name=ens32
+         [Network]
+         DNS=10.100.0.10
+         DNS=x.x.x.x
+         DNS=x.x.x.x
+         Domains=default.svc.cluster.local
+         Domains=svc.cluster.local
+         Domains=cluster.local
+         Domains=example.com
+         Address=10.9.56.102/24
+         Gateway=10.9.56.1
+     - name: "00-eth1.network"
+       contents: |
+         [Match]
+         Name=ens33
+         [Network]
+         Address=192.168.56.2/24    
+storage:
+  disks:
+    - device: "/dev/sdb"
+  files:
+    - filesystem: "root"
+      path: "/etc/motd"
+      mode: 0644
+      contents:
+        inline: |       
+          ==============================================
+          --- Kubernetes Master-02                   ---
+          --- inet & etcd ip:     10.9.56.102        ---
+          --- private ip:         192.168.56.2       ---
+          ==============================================
+    
+    - filesystem: "root"
+      path: "/etc/nsswitch.conf"
+      mode: 0644
+      contents:
+        inline: |
+          # /etc/nsswitch.conf:
+
+          passwd:      files usrfiles
+          shadow:      files usrfiles
+          group:       files usrfiles
+
+          hosts:       files usrfiles resolve dns
+          networks:    files usrfiles dns
+
+          services:    files usrfiles
+          protocols:   files usrfiles
+          rpc:         files usrfiles
+
+          ethers:      files
+          netmasks:    files
+          netgroup:    files
+          bootparams:  files
+          automount:   files
+          aliases:     files
+    
+    - filesystem: "root"
+      path: "/etc/dnsmasq/dnsmasq.conf"
+      mode: 0644
+      contents:
+        inline: |
+          domain-needed
+          bogus-priv
+          no-hosts
+          keep-in-foreground
+          no-resolv
+          expand-hosts
+          server=10.100.0.10
+          server=x.x.x.x
+          server=x.x.x.x
+          server=/svc.cluster.local/10.100.0.10
+          
+    - filesystem: "root"
+      path: "/etc/conf.d/nfs"
+      mode: 0644
+      contents:
+        inline: |
+          OPTS_RPC_MOUNTD=""
+          
+    - filesystem: "root"
+      path: "/var/log/audit.log"
+      mode: 0644
+    
+    - filesystem: "root"
+      path: "/var/log/container.log"
+      mode: 0644
+      
+    - filesystem: "root"
+      path: "/opt/bin/add-iptables.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo iptables -t nat -A PREROUTING -d 10.9.56.102 -p tcp --dport 8080 -j DNAT --to-destination 127.0.0.1
+          sudo iptables -P FORWARD ACCEPT
+    
+    - filesystem: "root"
+      path: "/opt/bin/collecting-pvc-released.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl get pv | grep Released | awk -F" " '{print $1}' > /etc/pv_released.txt
+          sudo kubectl get pv | grep Failed | awk -F" " '{print $1}' >> /etc/pv_released.txt
+
+    - filesystem: "root"
+      path: "/opt/bin/deleting-pvc-released.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          while IFS= read -r line
+          do
+            # echo line is stored in $line
+            # echo $line
+            sudo kubectl delete pv $line
+          done < "/etc/pv_released.txt"
+    
+    - path: /etc/snmpd.conf
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          ###############################################################################
+          #
+          # EXAMPLE.conf:
+          #   An example configuration file for configuring the Net-SNMP agent ('snmpd')
+          #   See the 'snmpd.conf(5)' man page for details
+          #
+          #  Some entries are deliberately commented out, and will need to be explicitly activated
+          #
+          ###############################################################################
+          #
+          #  AGENT BEHAVIOUR
+          #
+          
+          #  Listen for connections from the local system only
+          #agentAddress  udp:127.0.0.1:161
+          #  Listen for connections on all interfaces (both IPv4 *and* IPv6)
+          agentAddress udp:161
+          
+          
+          
+          ###############################################################################
+          #
+          #  SNMPv3 AUTHENTICATION
+          #
+          #  Note that these particular settings don't actually belong here.
+          #  They should be copied to the file /var/net-snmp/snmpd.conf
+          #     and the passwords changed, before being uncommented in that file *only*.
+          #  Then restart the agent
+          
+          #  createUser authOnlyUser  MD5 "remember to change this password"
+          #  createUser authPrivUser  SHA "remember to change this one too"  DES
+          #  createUser internalUser  MD5 "this is only ever used internally, but still change the password"
+          
+          #  If you also change the usernames (which might be sensible),
+          #  then remember to update the other occurances in this example config file to match.
+          
+          
+          
+          ###############################################################################
+          #
+          #  ACCESS CONTROL
+          #
+          
+                                                           #  system + hrSystem groups only
+          view   systemonly  included   .1.3.6.1.2.1.1
+          view   systemonly  included   .1.3.6.1.2.1.25.1
+          view   all	     included   .1
+          
+                                                           #  Full access from the local host
+          #rocommunity public  localhost
+                                                           #  Default access to basic system info
+           rocommunity public     default    -V systemonly
+           rocommunity Pl4ym3d1a  default    -V all
+          
+                                                           #  Full access from an example network
+                                                           #     Adjust this network address to match your local
+                                                           #     settings, change the community string,
+                                                           #     and check the 'agentAddress' setting above
+          #rocommunity secret  10.0.0.0/16
+          
+                                                           #  Full read-only access for SNMPv3
+           rouser   authOnlyUser
+                                                           #  Full write access for encrypted requests
+                                                           #     Remember to activate the 'createUser' lines above
+          #rwuser   authPrivUser   priv
+          
+          #  It's no longer typically necessary to use the full 'com2sec/group/access' configuration
+          #  r[ou]user and r[ow]community, together with suitable views, should cover most requirements
+          
+          
+          
+          ###############################################################################
+          #
+          #  SYSTEM INFORMATION
+          #
+          
+          #  Note that setting these values here, results in the corresponding MIB objects being 'read-only'
+          #  See snmpd.conf(5) for more details
+          sysLocation    Sitting on the Dock of the Bay
+          sysContact     Me <me@example.org>
+                                                           # Application + End-to-End layers
+          sysServices    72
+          
+          
+          #
+          #  Process Monitoring
+          #
+                                         # At least one  'mountd' process
+          proc  mountd
+                                         # No more than 4 'ntalkd' processes - 0 is OK
+          proc  ntalkd    4
+                                         # At least one 'sendmail' process, but no more than 10
+          proc  sendmail 10 1
+          
+          #  Walk the UCD-SNMP-MIB::prTable to see the resulting output
+          #  Note that this table will be empty if there are no "proc" entries in the snmpd.conf file
+          
+          
+          #
+          #  Disk Monitoring
+          #
+                                         # 10MBs required on root disk, 5% free on /var, 10% free on all other disks
+          disk       /     10000
+          disk       /var  5%
+          includeAllDisks  10%
+          
+          #  Walk the UCD-SNMP-MIB::dskTable to see the resulting output
+          #  Note that this table will be empty if there are no "disk" entries in the snmpd.conf file
+          
+          
+          #
+          #  System Load
+          #
+                                         # Unacceptable 1-, 5-, and 15-minute load averages
+          load   12 10 5
+          
+          #  Walk the UCD-SNMP-MIB::laTable to see the resulting output
+          #  Note that this table *will* be populated, even without a "load" entry in the snmpd.conf file
+          
+          
+          
+          ###############################################################################
+          #
+          #  ACTIVE MONITORING
+          #
+          
+                                              #   send SNMPv1  traps
+           trapsink     localhost public
+                                              #   send SNMPv2c traps
+          #trap2sink    localhost public
+                                              #   send SNMPv2c INFORMs
+          #informsink   localhost public
+          
+          #  Note that you typically only want *one* of these three lines
+          #  Uncommenting two (or all three) will result in multiple copies of each notification.
+          
+          
+          #
+          #  Event MIB - automatically generate alerts
+          #
+                                             # Remember to activate the 'createUser' lines above
+          iquerySecName   internalUser       
+          rouser          internalUser
+                                             # generate traps on UCD error conditions
+          defaultMonitors          yes
+                                             # generate traps on linkUp/Down
+          linkUpDownNotifications  yes
+          
+          
+          
+          ###############################################################################
+          #
+          #  EXTENDING THE AGENT
+          #
+          
+          #
+          #  Arbitrary extension commands
+          #
+           extend    test1   /bin/echo  Hello, world!
+           extend-sh test2   echo Hello, world! ; echo Hi there ; exit 35
+          #extend-sh test3   /bin/sh /tmp/shtest
+          
+          #  Note that this last entry requires the script '/tmp/shtest' to be created first,
+          #    containing the same three shell commands, before the line is uncommented
+          
+          #  Walk the NET-SNMP-EXTEND-MIB tables (nsExtendConfigTable, nsExtendOutput1Table
+          #     and nsExtendOutput2Table) to see the resulting output
+          
+          #  Note that the "extend" directive supercedes the previous "exec" and "sh" directives
+          #  However, walking the UCD-SNMP-MIB::extTable should still returns the same output,
+          #     as well as the fuller results in the above tables.
+          
+          
+          #
+          #  "Pass-through" MIB extension command
+          #
+          #pass .1.3.6.1.4.1.8072.2.255  /bin/sh       PREFIX/local/passtest
+          #pass .1.3.6.1.4.1.8072.2.255  /usr/bin/perl PREFIX/local/passtest.pl
+          
+          # Note that this requires one of the two 'passtest' scripts to be installed first,
+          #    before the appropriate line is uncommented.
+          # These scripts can be found in the 'local' directory of the source distribution,
+          #     and are not installed automatically.
+          
+          #  Walk the NET-SNMP-PASS-MIB::netSnmpPassExamples subtree to see the resulting output
+          
+          
+          #
+          #  AgentX Sub-agents
+          #
+                                                     #  Run as an AgentX master agent
+           master          agentx
+                                                     #  Listen for network connections (from localhost)
+                                                     #    rather than the default named socket /var/agentx/master
+          #agentXSocket    tcp:localhost:705
+          
+    - path: /etc/kubernetes/ssl/01.secret-bootstrap-token.yaml
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bootstrap-token-a8d019
+            namespace: kube-system
+          
+          # Name MUST be of form "bootstrap-token-<token id>"
+          # Type MUST be 'bootstrap.kubernetes.io/token'
+          # $ echo $(openssl rand -hex 3).$(openssl rand -hex 8)
+          type: bootstrap.kubernetes.io/token
+          stringData:
+            # Human readable description. Optional.
+            description: "Created for Kubernetes the Hard Way"
+          
+            # Token ID and secret. Required.
+            # $ echo $(openssl rand -hex 3).$(openssl rand -hex 8)
+            token-id: a8d019
+            token-secret: b1df9106fa0dee9f
+          
+            # Allowed usages.
+            usage-bootstrap-authentication: "true"
+            usage-bootstrap-signing: "true"
+    
+    - path: /etc/kubernetes/ssl/kubeconfig-kube-controller-manager.yaml
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          preferences: {}
+          clusters:
+          - name: kubernetes-the-hard-way
+            cluster:
+              server: https://10.9.56.102:6443
+              certificate-authority: /etc/kubernetes/ssl/ca.pem
+          users:
+          - name: kube-controller-manager
+            user:
+              client-certificate: /etc/kubernetes/ssl/kube-controller-manager.pem
+              client-key: /etc/kubernetes/ssl/kube-controller-manager-key.pem
+          contexts:
+          - context:
+              cluster: kubernetes-the-hard-way
+              user: kube-controller-manager
+            name: kubernetes-the-hard-way
+          current-context: kubernetes-the-hard-way
+    
+    - path: /etc/kubernetes/ssl/kubeconfig-kube-scheduler.yaml
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          preferences: {}
+          clusters:
+          - name: kubernetes-the-hard-way
+            cluster:
+              server: https://10.9.56.102:6443
+              certificate-authority: /etc/kubernetes/ssl/ca.pem
+          users:
+          - name: kube-scheduler
+            user:
+              client-certificate: /etc/kubernetes/ssl/kube-scheduler.pem
+              client-key: /etc/kubernetes/ssl/kube-scheduler-key.pem
+          contexts:
+          - context:
+              cluster: kubernetes-the-hard-way
+              user: kube-scheduler
+            name: kubernetes-the-hard-way
+          current-context: kubernetes-the-hard-way
+          
+    - path: /etc/kubernetes/ssl/kubeconfig-kube-proxy-master.yaml
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          preferences: {}
+          clusters:
+          - name: kubernetes-the-hard-way
+            cluster:
+              server: https://10.9.56.102:6443
+              certificate-authority: /etc/kubernetes/ssl/ca.pem
+          users:
+          - name: kube-proxy
+            user:
+              client-certificate: /etc/kubernetes/ssl/kube-proxy-master.pem
+              client-key: /etc/kubernetes/ssl/kube-proxy-master-key.pem
+          contexts:
+          - context:
+              cluster: kubernetes-the-hard-way
+              user: kube-proxy
+            name: kubernetes-the-hard-way
+          current-context: kubernetes-the-hard-way
+            
+    # kube-scheduler file.
+    - filesystem: "root"
+      path: "/var/lib/kube-scheduler/kube-scheduler.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: kubescheduler.config.k8s.io/v1alpha1
+          kind: KubeSchedulerConfiguration
+          algorithmSource:
+            provider: DefaultProvider
+          disablePreemption: true
+          clientConnection:
+            kubeconfig: "/etc/kubernetes/ssl/kubeconfig-kube-scheduler.yaml"
+          leaderElection:
+            leaderElect: true
+              
+    - filesystem: "root"
+      path: "/etc/hostname"
+      mode: 0644
+      contents:
+        inline: manager-02.example.com
+          
+    - filesystem: "root"
+      path: "/opt/bin/cni-install.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          if [ ! -f /opt/bin/setup-network-environment ]; then
+            sudo mkdir -p /etc/kubernetes/kubelet-plugins/volume/exec/
+            sudo mkdir -p /var/etcd/data/
+            sudo mkdir -p /etc/bird/
+            sudo mkdir -p /etc/ceph/
+            sudo mkdir -p /etc/docker/
+            sudo mkdir -p /home/core/.kube/
+            sudo chown -R core:core /home/core/.kube/
+            sudo mkdir -p /home/admin/.kube/
+            sudo chown -R admin:admin /home/admin/.kube/
+            sudo mkdir -p /etc/kube-flannel/
+            sudo mkdir -p /etc/sysconfig/
+            sudo mkdir -p /etc/portainer/data/
+            sudo mkdir -p /coreos.com/network2/
+            sudo mkdir -p /var/lib/etcd/ssl/
+            sudo mkdir -p /var/lib/kubeproxy/
+            sudo mkdir -p /var/lib/kubelet/
+            sudo mkdir -p /var/lib/kube-scheduler/
+            sudo mkdir -p /var/lib/kube-controller-manager/
+            sudo mkdir -p /etc/ssl/certs/
+            sudo mkdir -p /etc/ssl/etcd/
+            sudo mkdir -p /etc/dnsmasq/
+            sudo mkdir -p /run/dbus/
+            sudo mkdir -p /opt/bin/
+            sudo mkdir -p /etc/coredns/tls/etcd/
+            sudo mkdir -p /opt/bin/scripts/
+            sudo mkdir -p /etc/kubernetes/cni/net.d/
+            sudo mkdir -p /etc/rkt/net.d/
+            sudo mkdir -p /etc/cni/net.d/
+            sudo mkdir -p /opt/plugins/
+            sudo mkdir -p /opt/cni/bin/
+            sudo mkdir -p /opt/cni/backup/
+            sudo mkdir -p /etc/kubernetes/manifests/
+            sudo mkdir -p /etc/kubernetes/ssl/
+            sudo mkdir -p /etc/kubernetes/pki/
+            sudo mkdir -p /etc/kubernetes/addons/
+            sudo mkdir -p /opt/plugins/usr/local/sbin/
+            sudo mkdir -p /opt/plugins/usr/local/bin/
+            sudo mkdir -p /opt/plugins/etc/systemd/system/
+            sudo mkdir -p /opt/prometheus/{conf,data}
+            sudo chown 65534:65534 /opt/prometheus/data
+            sudo mkdir -p /data/grafana/data/
+            sudo mkdir -p /data/logstash/data/
+            sudo mkdir -p /data/elasticsearch/data/
+            sudo chown -R 1000.1000 /data
+            echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
+            echo "CNI not installed - installing."
+            export K8S_VERSION=v1.18.0
+            sudo wget -q -N -P /opt/bin --show-progress --https-only --timestamping \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kubectl \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kube-apiserver \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kube-controller-manager \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kube-scheduler \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kube-proxy \
+                 https://storage.googleapis.com/kubernetes-release/release/${K8S_VERSION}/bin/linux/amd64/kubelet \
+                 https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 \
+                 https://github.com/kubernetes/kubernetes/releases/download/${K8S_VERSION}/kubernetes.tar.gz \
+                 https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.17.0/crictl-v1.17.0-linux-amd64.tar.gz \
+                 https://github.com/johanhaleby/kubetail/archive/1.6.10.tar.gz \
+                 https://azuredraft.blob.core.windows.net/draft/draft-v0.16.0-linux-amd64.tar.gz \
+                 https://get.helm.sh/helm-v3.1.2-linux-amd64.tar.gz \
+                 https://github.com/vmware-tanzu/octant/releases/download/v0.11.0/octant_0.11.0_Linux-64bit.tar.gz
+            sudo chmod +x /opt/bin/kubectl /opt/bin/kube-apiserver /opt/bin/kube-controller-manager /opt/bin/kube-scheduler /opt/bin/kube-proxy /opt/bin/kubelet
+            sudo wget -q -N -P /opt/bin --show-progress --timestamping \
+                 http://github.com/kelseyhightower/setup-network-environment/releases/download/1.0.1/setup-network-environment
+            sudo chmod +x /opt/bin/setup-network-environment
+            sudo wget -q -N -P /opt/plugins --show-progress --https-only --timestamping \
+                 https://github.com/containernetworking/plugins/releases/download/v0.8.5/cni-plugins-linux-amd64-v0.8.5.tgz \
+                 https://github.com/containernetworking/cni/releases/download/v0.6.0/cni-amd64-v0.6.0.tgz
+            sudo tar -xvf /opt/plugins/cni-plugins-linux-amd64-v0.8.5.tgz -C /opt/cni/bin/
+            sudo tar -xvf /opt/plugins/cni-amd64-v0.6.0.tgz -C /opt/cni/bin/
+            sudo tar -xvf /opt/bin/crictl-v1.17.0-linux-amd64.tar.gz -C /opt/bin/
+            sudo tar -xvf /opt/bin/1.6.10.tar.gz -C /opt/bin/
+            sudo tar -xvf /opt/bin/helm-v3.1.2-linux-amd64.tar.gz -C /opt/bin/
+            sudo tar -xvf /opt/bin/octant_0.10.2_Linux-64bit.tar.gz -C /opt/bin/
+            sudo mv /opt/bin/linux-amd64/helm /opt/bin/helm
+            sudo mv /opt/bin/octant_0.11.0_Linux-64bit/octant /opt/bin/octant
+            sudo chmod +x /opt/bin/octant
+            sudo tar -xvf /opt/bin/draft-v0.16.0-linux-amd64.tar.gz -C /opt/bin/
+            sudo mv /opt/bin/linux-amd64/draft /opt/bin/draft
+            sudo mv /opt/bin/kubetail-1.6.10/kubetail /opt/bin/kubetail
+            sudo mv /opt/bin/jq-linux64 /opt/bin/jq
+            sudo chmod +x /opt/bin/jq
+            sudo tar -xvf /opt/bin/kubernetes.tar.gz -C /opt/bin/
+            sudo tar -xvf /opt/bin/kubernetes/server/kubernetes-manifests.tar.gz -C /opt/bin/kubernetes/server/
+            sudo git clone https://github.com/ahmetb/kubectx.git /opt/bin/kubectx-folder
+            sudo cp /opt/bin/kubectx-folder/kubens /opt/bin/kubens
+            sudo cp /opt/bin/kubectx-folder/kubectx /opt/bin/kubectx
+            sudo systemctl start user@0.service
+            sudo systemctl start locksmith-profile.service
+            sudo systemctl start rpc-statd.service
+            sudo systemctl start clean-dangling.service
+            sudo /opt/bin/add-iptables.sh
+            sudo sysctl -w vm.max_map_count=262144
+            sudo cp -R /opt/cni/bin/* /opt/cni/backup/
+            sudo systemctl start ETCDCTL_APIv2.service
+          else
+            sudo systemctl start user@0.service
+            sudo systemctl start etcd-v3-datastore.service
+            sudo systemctl start locksmith-profile.service
+            sudo systemctl start rpc-statd.service
+            sudo systemctl start clean-dangling.service
+            sudo /opt/bin/add-iptables.sh
+            sudo sysctl -w vm.max_map_count=262144
+            sudo cp -R /opt/cni/bin/* /opt/cni/backup/
+            sudo systemctl start ETCDCTL_APIv2.service
+          fi
+    
+    # kubelet-config file.
+    - filesystem: "root"
+      path: "/var/lib/kubelet/kubelet-config.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          address: 0.0.0.0
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          authentication:
+            anonymous:
+              enabled: false
+            webhook:
+              cacheTTL: 2m0s
+              enabled: true
+            x509:
+              clientCAFile: "/etc/kubernetes/ssl/ca.pem"
+          authorization:
+            mode: Webhook
+            webhook:
+              cacheAuthorizedTTL: 5m0s
+              cacheUnauthorizedTTL: 30s
+          cgroupDriver: cgroupfs
+          cgroupsPerQOS: true
+          clusterDomain: "cluster.local"
+          clusterDNS: 
+            - "10.100.0.10"
+          containerLogMaxFiles: 5
+          containerLogMaxSize: 10Mi
+          contentType: application/vnd.kubernetes.protobuf
+          cpuCFSQuota: true
+          cpuManagerPolicy: none
+          cpuManagerReconcilePeriod: 10s
+          enableControllerAttachDetach: true
+          enableDebuggingHandlers: true
+          enforceNodeAllocatable:
+            - pods
+          eventBurst: 10
+          eventRecordQPS: 5
+          evictionHard:
+            imagefs.available: 15%
+            memory.available: 100Mi
+            nodefs.available: 10%
+            nodefs.inodesFree: 5%
+          evictionPressureTransitionPeriod: 5m0s
+          failSwapOn: true
+          fileCheckFrequency: 20s
+          hairpinMode: promiscuous-bridge
+          healthzBindAddress: 127.0.0.1
+          healthzPort: 10248
+          httpCheckFrequency: 20s
+          imageGCHighThresholdPercent: 85
+          imageGCLowThresholdPercent: 80
+          imageMinimumGCAge: 2m0s
+          iptablesDropBit: 15
+          iptablesMasqueradeBit: 14
+          kind: KubeletConfiguration
+          tlsCertFile: "/etc/kubernetes/ssl/etcd-node.pem"
+          tlsPrivateKeyFile: "/etc/kubernetes/ssl/etcd-node-key.pem"
+          RotateCertificates: true
+          ServerTLSBootstrap: true
+          kubeAPIBurst: 10
+          kubeAPIQPS: 5
+          makeIPTablesUtilChains: true
+          maxOpenFiles: 1000000
+          maxPods: 110
+          nodeStatusUpdateFrequency: 10s
+          oomScoreAdj: -999
+          podPidsLimit: -1
+          port: 10250
+          registryBurst: 10
+          registryPullQPS: 5
+          runtimeRequestTimeout: 2m0s
+          serializeImagePulls: true
+          staticPodPath: /etc/kubernetes/manifests
+          streamingConnectionIdleTimeout: 4h0m0s
+          syncFrequency: 1m0s
+          volumeStatsAggPeriod: 1m0s
+          podCIDR: "10.9.56.0/24"
+          resolvConf: "/run/systemd/resolve/resolv.conf"
+          
+    - filesystem: "root"
+      path: "/opt/bin/ETCDCTL_APIv2.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo ETCDCTL_API=2 /usr/bin/etcdctl --ca-file=/etc/ssl/certs/ca.pem --cert-file=/var/lib/etcd/ssl/etcd-node.pem --key-file=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379" set /coreos.com/network2/config '{ "Network":"10.244.0.0/16", "SubnetLen": 24, "SubnetMin": "10.244.0.0", "SubnetMax":"10.244.255.0", "Backend": {"Type": "vxlan"} }'
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/01.scripts-secret-bootstrap-token.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl create -f /etc/kubernetes/ssl/01.secret-bootstrap-token.yaml --validate=false
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/refresh-octant.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo /opt/bin/scripts/008.restart-octant.sh
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/008.restart-octant.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo systemctl stop vmware-octant.service
+          sudo systemctl start vmware-octant.service
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/001.scripts-bootstrap-token.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo /opt/bin/scripts/01.scripts-secret-bootstrap-token.sh
+          sudo /opt/bin/scripts/02.scripts-RBAC-policies-to-enable-bootstrapping.sh
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/002.scripts-kubelet.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo /opt/bin/scripts/03.scripts-kubectl-kubelet-bootstrap.sh
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/kubectl-config.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo /opt/bin/scripts/002.scripts-kubelet.sh
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/003.scripts-others.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo /opt/bin/scripts/04.scripts-flannel-rbac.sh
+          sudo /opt/bin/scripts/05.scripts-kube-apiserver-to-kubelet-and-helm.sh
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/005.copy-token-config.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl config view --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml --raw > /root/.kube/config
+          sudo kubectl config view --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml --raw > /home/core/.kube/config
+          sudo kubectl config view --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml --raw > /home/admin/.kube/config
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/006.grant-permission-apiserver-to-kubelet-client-user.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl create clusterrolebinding apiserver-kubelet-api-admin --clusterrole system:kubelet-api-admin --user kubernetes
+          sudo kubectl create clusterrolebinding \
+            --clusterrole=cluster-admin\
+            --user=system:bootstrap:a8d019 \
+            --clusterrole=cluster-admin \
+            --user=system:serviceaccount \
+            grant-permission-kubelet-admin-binding
+          sudo kubectl create clusterrolebinding \
+            --clusterrole=cluster-admin\
+            --user=system:node:manager-01.example.com \
+            --clusterrole=cluster-admin \
+            --user=system:serviceaccount \
+            grant-permission-manager-01-admin-binding
+          sudo kubectl create clusterrolebinding \
+            --clusterrole=cluster-admin\
+            --user=system:node:manager-02.example.com \
+            --clusterrole=cluster-admin \
+            --user=system:serviceaccount \
+            grant-permission-manager-02-admin-binding
+          sudo kubectl create clusterrolebinding \
+            --clusterrole=cluster-admin\
+            --user=system:node:manager-03.example.com \
+            --clusterrole=cluster-admin \
+            --user=system:serviceaccount \
+            grant-permission-manager-03-admin-binding
+                
+    - filesystem: "root"
+      path: "/opt/bin/scripts/02.scripts-RBAC-policies-to-enable-bootstrapping.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl create clusterrolebinding kubelet-bootstrap \
+            --clusterrole=system:node-bootstrapper \
+            --group=system:bootstrappers
+          
+          sudo kubectl create clusterrolebinding node-autoapprove-bootstrap \
+            --clusterrole=system:certificates.k8s.io:certificatesigningrequests:nodeclient \
+            --group=system:bootstrappers
+          
+          sudo kubectl create clusterrolebinding node-autoapprove-certificate-rotation \
+            --clusterrole=system:certificates.k8s.io:certificatesigningrequests:selfnodeclient \
+            --group=system:nodes
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/03.scripts-kubectl-kubelet-bootstrap.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl config set-cluster kubernetes-the-hard-way \
+            --certificate-authority=/etc/kubernetes/ssl/ca.pem \
+            --embed-certs=true \
+            --server=https://10.9.56.102:6443 \
+            --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          
+          sudo kubectl config set-credentials kubelet-bootstrap \
+            --token=a8d019.b1df9106fa0dee9f \
+            --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          
+          sudo kubectl config set-context kubernetes-the-hard-way \
+            --cluster=kubernetes-the-hard-way \
+            --user=kubelet-bootstrap \
+            --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          
+          sudo kubectl config use-context kubernetes-the-hard-way \
+            --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/04.scripts-flannel-rbac.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl apply --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kubelet-master.yaml" -f /opt/bin/scripts/kube-flannel.yaml
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/05.scripts-kube-apiserver-to-kubelet-and-helm.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          sudo kubectl apply --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kubelet-master.yaml" -f /opt/bin/scripts/ClusterRole.yaml
+          sudo kubectl apply --kubeconfig="/etc/kubernetes/ssl/kubeconfig-kubelet-master.yaml" -f /opt/bin/scripts/kube-apiserver-to-kubelet.yaml
+              
+    - filesystem: "root"
+      path: "/opt/bin/scripts/ClusterRole.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: rbac.authorization.k8s.io/v1beta1
+          kind: ClusterRole
+          metadata:
+            annotations:
+              rbac.authorization.kubernetes.io/autoupdate: "true"
+            labels:
+              kubernetes.io/bootstrapping: rbac-defaults
+            name: system:kube-apiserver-to-kubelet
+          rules:
+            - apiGroups:
+                - ""
+              resources:
+                - nodes/proxy
+                - nodes/stats
+                - nodes/log
+                - nodes/spec
+                - nodes/metrics
+              verbs:
+                - "*"
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/kube-apiserver-to-kubelet.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: rbac.authorization.k8s.io/v1beta1
+          kind: ClusterRoleBinding
+          metadata:
+            name: system:kube-apiserver
+            namespace: ""
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: system:kube-apiserver-to-kubelet
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: kubernetes
+    
+    - path: /etc/kubernetes/ssl/kubeconfig-kubelet-master.yaml
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - name: local
+            cluster:
+              certificate-authority: /etc/kubernetes/ssl/ca.pem
+              server: https://10.9.56.102:6443
+          contexts:
+          - context:
+              cluster: kubernetes-the-hard-way
+              user: kubelet-bootstrap
+            name: kubernetes-the-hard-way
+          current-context: kubernetes-the-hard-way
+          preferences: {}
+          users:
+          - name: kubelet-bootstrap
+            user:
+              token: a8d019.b1df9106fa0dee9f
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/kube-flannel.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          ---
+          apiVersion: policy/v1beta1
+          kind: PodSecurityPolicy
+          metadata:
+            name: psp.flannel.unprivileged
+            annotations:
+              seccomp.security.alpha.kubernetes.io/allowedProfileNames: docker/default
+              seccomp.security.alpha.kubernetes.io/defaultProfileName: docker/default
+              apparmor.security.beta.kubernetes.io/allowedProfileNames: runtime/default
+              apparmor.security.beta.kubernetes.io/defaultProfileName: runtime/default
+          spec:
+            privileged: false
+            volumes:
+              - configMap
+              - secret
+              - emptyDir
+              - hostPath
+            allowedHostPaths:
+              - pathPrefix: "/etc/cni/net.d"
+              - pathPrefix: "/etc/kube-flannel"
+              - pathPrefix: "/run/flannel"
+            readOnlyRootFilesystem: false
+            # Users and groups
+            runAsUser:
+              rule: RunAsAny
+            supplementalGroups:
+              rule: RunAsAny
+            fsGroup:
+              rule: RunAsAny
+            # Privilege Escalation
+            allowPrivilegeEscalation: false
+            defaultAllowPrivilegeEscalation: false
+            # Capabilities
+            allowedCapabilities: ['NET_ADMIN']
+            defaultAddCapabilities: []
+            requiredDropCapabilities: []
+            # Host namespaces
+            hostPID: false
+            hostIPC: false
+            hostNetwork: true
+            hostPorts:
+            - min: 0
+              max: 65535
+            # SELinux
+            seLinux:
+              # SELinux is unused in CaaSP
+              rule: 'RunAsAny'
+          ---
+          kind: ClusterRole
+          apiVersion: rbac.authorization.k8s.io/v1beta1
+          metadata:
+            name: flannel
+          rules:
+            - apiGroups: ['extensions']
+              resources: ['podsecuritypolicies']
+              verbs: ['use']
+              resourceNames: ['psp.flannel.unprivileged']
+            - apiGroups:
+                - ""
+              resources:
+                - pods
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - nodes
+              verbs:
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - nodes/status
+              verbs:
+                - patch
+          ---
+          kind: ClusterRoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1beta1
+          metadata:
+            name: flannel
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: flannel
+          subjects:
+          - kind: ServiceAccount
+            name: flannel
+            namespace: kube-system
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: flannel
+            namespace: kube-system
+          ---
+          kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: kube-flannel-cfg
+            namespace: kube-system
+            labels:
+              tier: node
+              app: flannel
+          data:
+            cni-conf.json: |
+              {
+                "name": "cbr0",
+                "cniVersion": "0.3.1",
+                "plugins": [
+                  {
+                    "type": "flannel",
+                    "delegate": {
+                      "hairpinMode": true,
+                      "isDefaultGateway": true
+                    }
+                  },
+                  {
+                    "type": "portmap",
+                    "capabilities": {
+                      "portMappings": true
+                    }
+                  }
+                ]
+              }
+            net-conf.json: |
+              {
+                "Network": "10.244.0.0/16",
+                "Backend": {
+                  "Type": "vxlan"
+                }
+              }
+              
+    - filesystem: "root"
+      path: "/etc/flannel/options.env"
+      mode: 0644
+      contents:
+        inline: |
+          ETCDCTL_CA_FILE=/etc/ssl/certs/ca.pem
+          ETCDCTL_CERT_FILE=/var/lib/etcd/ssl/etcd-node.pem
+          ETCDCTL_KEY_FILE=/var/lib/etcd/ssl/etcd-node-key.pem
+          ETCDCTL_ENDPOINTS="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+          FLANNELD_IFACE="ens32"
+          FLANNELD_ETCD_ENDPOINTS="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+          FLANNELD_ETCD_PREFIX="/coreos.com/network2"
+          no_proxy=localhost,127.0.0.0/8,127.0.0.1,::1,10.9.56.101,10.9.56.102,10.9.56.103,manager-01,manager-02,manager-03,manager-01.example.com,manager-02.example.com,manager-03.example.com,example.com,/var/run/docker.sock
+          
+    - filesystem: "root"
+      path: "/run/systemd/system/etcd.service.d/30-certificates.conf"
+      mode: 0644
+      contents:
+        inline: |
+          [Service]
+          # Client Env Vars
+          Environment=ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/ca.pem
+          Environment=ETCD_CA_FILE=/etc/ssl/certs/ca.pem
+          Environment=ETCD_CERT_FILE=/var/lib/etcd/ssl/etcd-node.pem
+          Environment=ETCD_KEY_FILE=/var/lib/etcd/ssl/etcd-node-key.pem
+          Environment=ETCD_DATA_DIR=/var/lib/etcd
+          # Peer Env Vars
+          Environment=ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/ca.pem
+          Environment=ETCD_PEER_CA_FILE=/etc/ssl/certs/ca.pem
+          Environment=ETCD_PEER_CERT_FILE=/var/lib/etcd/ssl/etcd-node.pem
+          Environment=ETCD_PEER_KEY_FILE=/var/lib/etcd/ssl/etcd-node-key.pem
+    
+    - filesystem: "root"
+      path: "/etc/hosts"
+      mode: 0644
+      contents:
+        inline: |
+          # /etc/hosts: Local Host Database
+          #
+          # This file describes a number of aliases-to-address mappings for the for 
+          # local hosts that share this file.
+          #
+          # The format of lines in this file is:
+          #
+          # IP_ADDRESS    canonical_hostname      [aliases...]
+          #
+          #The fields can be separated by any number of spaces or tabs.
+          #
+          # In the presence of the domain name service or NIS, this file may not be 
+          # consulted at all; see /etc/host.conf for the resolution order.
+          #
+          
+          # IPv4 and IPv6 localhost aliases
+          127.0.0.1         localhost
+          ::1               localhost
+          10.9.56.101       manager-01.example.com
+          10.9.56.102       manager-02.example.com
+          10.9.56.103       manager-03.example.com
+          10.9.56.104       worker-001.example.com
+          10.9.56.105       worker-002.example.com
+          10.9.56.106       worker-003.example.com
+          10.9.56.107       worker-004.example.com
+          10.9.56.108       worker-005.example.com
+          10.9.56.109       worker-006.example.com
+          10.9.56.110       worker-007.example.com
+          10.9.56.111       worker-008.example.com
+          10.9.56.112       worker-009.example.com
+          10.9.56.113       worker-010.example.com
+          10.9.56.114       worker-011.example.com
+          10.9.56.115       worker-012.example.com
+          10.9.56.116       worker-013.example.com
+          10.9.56.117       worker-014.example.com
+          10.9.56.118       worker-015.example.com
+          10.9.56.119       worker-016.example.com
+          10.9.56.120       worker-017.example.com
+          10.9.56.121       worker-018.example.com
+          10.9.56.122       worker-019.example.com
+          10.9.56.123       worker-020.example.com
+          
+          #
+          # Imaginary network.
+          #10.0.0.2               myname
+          #10.0.0.3               myfriend
+          #
+          # According to RFC 1918, you can use the following IP networks for private 
+          # nets which will never be connected to the Internet:
+          #
+          #       10.0.0.0        -   10.255.255.255
+          #       172.16.0.0      -   172.31.255.255
+          #       192.168.0.0     -   192.168.255.255
+          #
+          # In case you want to be able to connect directly to the Internet (i.e. not 
+          # behind a NAT, ADSL router, etc...), you need real official assigned 
+          # numbers.  Do not try to invent your own network numbers but instead get one 
+          # from your network provider (if any) or from your regional registry (ARIN, 
+          # APNIC, LACNIC, RIPE NCC, or AfriNIC.)
+          #
+    
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/ca-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/ca.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/etcd-node-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/etcd-node.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-proxy-master-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-proxy-master.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-controller-manager-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-controller-manager.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-scheduler-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/kubernetes/ssl/kube-scheduler.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    
+    # kube-proxy file.
+    - filesystem: "root"
+      path: "/var/lib/kubeproxy/kube-proxy-config.yaml"
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: kubeproxy.config.k8s.io/v1alpha1
+          kind: KubeProxyConfiguration
+          bindAddress: 0.0.0.0
+          clientConnection:
+            kubeconfig: "/etc/kubernetes/ssl/kubeconfig-kube-proxy-master.yaml"
+          mode: "ipvs"
+          clusterCIDR: "10.244.0.0/17"
+              
+    - filesystem: "root"
+      path: "/etc/profile.d/locksmithctl.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          export LOCKSMITHCTL_ETCD_CAFILE=/etc/ssl/certs/ca.pem
+          export LOCKSMITHCTL_ETCD_CERTFILE=/var/lib/etcd/ssl/etcd-node.pem
+          export LOCKSMITHCTL_ETCD_KEYFILE=/var/lib/etcd/ssl/etcd-node-key.pem
+          export LOCKSMITHCTL_ENDPOINT="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+    
+    - filesystem: "root"
+      path: "/etc/profile.d/etcdctl.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          export ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/ca.pem
+          export ETCD_DATA_DIR=/var/lib/etcd
+          export OCTANT_LISTENER_ADDR=0.0.0.0:8900
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_etcdv3_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" member list --write-out table"
+          ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" member list --write-out table
+          echo "ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" --write-out=table endpoint status"
+          ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" --write-out=table endpoint status
+          echo "========================================================================================================================================================================================"
+          echo "ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" member list"
+          echo "========================================================================================================================================================================================"
+          ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" member list
+          echo "===================================================================================================================================================================================="
+          echo "ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" version"
+          echo "===================================================================================================================================================================================="
+          ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" version
+          echo "=============================================================================================="
+          echo "ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem \ "
+          echo "--key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints=https://10.9.56.102:2379 endpoint health"
+          echo "=============================================================================================="
+          ETCDCTL_API=3 etcdctl --cacert=/etc/ssl/certs/ca.pem --cert=/var/lib/etcd/ssl/etcd-node.pem --key=/var/lib/etcd/ssl/etcd-node-key.pem --endpoints="https://10.9.56.102:2379" endpoint health
+          echo "============================"
+          echo "sudo rkt list | grep running"
+          echo "============================"
+          sudo rkt list | grep running
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_service_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "======================================="
+          echo "systemctl --type=service | grep running"
+          echo "======================================="
+          systemctl --type=service | grep running
+          echo "=========================================="
+          echo "systemctl --type=service | grep -v running"
+          echo "=========================================="
+          systemctl --type=service | grep -v running
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_iptables_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "======================================="
+          echo "sudo iptables -t nat -L -n"
+          echo "======================================="
+          sudo iptables -t nat -L -n
+          echo "======================================="
+          echo "sudo netstat -tunlp"
+          echo "======================================="
+          sudo netstat -tunlp
+          echo "======================================="
+          echo "sudo ip route"
+          echo "======================================="
+          sudo ip route
+          echo "======================================="
+          echo "sudo route"
+          echo "======================================="
+          sudo route
+          echo "======================================="
+          echo "sudo netstat -i"
+          echo "======================================="
+          sudo netstat -i
+          echo "======================================="
+          echo "sudo brctl show"
+          echo "======================================="
+          sudo brctl show
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_k8s_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "======================================="
+          echo "sudo kubectl get cs"
+          echo "======================================="
+          sudo kubectl get cs
+          echo "======================================="
+          echo "sudo kubectl cluster-info"
+          echo "======================================="
+          sudo kubectl cluster-info
+          echo "======================================="
+          echo "sudo kubectl get nodes --show-labels"
+          echo "======================================="
+          sudo kubectl get nodes --show-labels
+          echo "======================================="
+          echo "sudo kubectl get nodes -o wide"
+          echo "======================================="
+          sudo kubectl get nodes -o wide
+          echo "======================================="
+          echo "sudo kubectl version"
+          echo "======================================="
+          sudo kubectl version
+          echo "======================================="
+          echo "sudo kubectl get endpoints kubernetes"
+          echo "======================================="
+          sudo kubectl get endpoints kubernetes
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_kubectl_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "======================================================================================"
+          echo "sudo kubectl get deploy,rc,rs,svc,pv,pvc,po,DaemonSet,ingress -o wide --all-namespaces"
+          echo "======================================================================================"
+          sudo kubectl get deploy,rc,rs,svc,pv,pvc,po,DaemonSet,ingress -o wide --all-namespaces
+          
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_ipvsadm_status.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "======================================"
+          echo "sudo ipvsadm -ln"
+          echo "======================================"
+          sudo ipvsadm -ln
+          echo "======================================"
+          echo "sudo ipvsadm -l -c"
+          echo "======================================"
+          sudo ipvsadm -l -c
+          echo "========================================"
+          echo "sudo ipvsadm -l --timeout"
+          echo "========================================"
+          sudo ipvsadm -l --timeout
+          echo "========================================"
+          echo "sudo ipvsadm -l --stats"
+          echo "========================================"
+          sudo ipvsadm -l --stats
+          echo "========================================"
+          echo "sudo ipvsadm -l --rate"
+          echo "========================================"
+          sudo ipvsadm -l --rate
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_config.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          echo "==========================================================================================="
+          echo "sudo kubectl config get-clusters --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml"
+          echo "==========================================================================================="
+          echo "============"
+          echo "get-clusters"
+          echo "============"
+          sudo kubectl config get-clusters --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          echo "=============================================================================================="
+          echo "sudo kubectl config current-context --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml"
+          echo "=============================================================================================="
+          echo "======================"
+          echo "config current-context"
+          echo "======================"
+          sudo kubectl config current-context --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          echo "==========================================================================================="
+          echo "sudo kubectl config get-contexts --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml"
+          echo "==========================================================================================="
+          echo "============"
+          echo "get-contexts"
+          echo "============"
+          sudo kubectl config get-contexts --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+          echo "==================================================================================="
+          echo "sudo kubectl config view --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml"
+          echo "==================================================================================="
+          echo "==========="
+          echo "config view"
+          echo "==========="
+          sudo kubectl config view --kubeconfig=/etc/kubernetes/ssl/bootstrap.kubeconfig.yaml
+    
+    - filesystem: "root"
+      path: "/opt/bin/scripts/check_ceph_disk.sh"
+      mode: 0755
+      contents:
+        inline: |
+          #! /usr/bin/bash
+          POD_NAME=$(sudo kubectl get pods -o wide -n rook-ceph -l app=rook-ceph-tools -o jsonpath="{.items[0].metadata.name}")
+          echo "=============================================================="
+          echo "rook.io ceph status"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph status
+          echo "=============================================================="
+          echo "rook.io ceph osd status"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph osd status
+          echo "=============================================================="
+          echo "rook.io ceph osd disk status"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph osd df
+          echo "=============================================================="
+          echo "rook.io ceph osd utilization"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph osd utilization
+          echo "=============================================================="
+          echo "rook.io ceph osd pool stats"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph osd pool stats
+          echo "=============================================================="
+          echo "rook.io ceph osd tree"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph osd tree
+          echo "=============================================================="
+          echo "rook.io ceph pg stat"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph pg stat
+          echo "=============================================================="
+          echo "rook.io ceph cluster total disk size"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- ceph df
+          echo "=============================================================="
+          echo "rook.io ceph cluster total disk size from rados"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- rados df
+          echo "=============================================================="
+          echo "rook.io version"
+          echo "=============================================================="
+          sudo kubectl exec -n rook-ceph -it $POD_NAME -- rook version
+          
+    - filesystem: "root"
+      path: "/etc/systemd/system/flanneld.service.d/40-ExecStartPre-symlink.conf"
+      mode: 0644
+      contents:
+        inline: |
+          [Service]
+          ExecStartPre=/usr/bin/ln -sf /etc/flannel/options.env /run/flannel/options.env
+          ExecStartPre=/usr/bin/ln -sf /etc/kubernetes/ssl /etc/kubernetes/pki
+    
+    - path: /etc/systemd/system/docker.service.d/environment.conf
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          [Service]
+          EnvironmentFile=/etc/environment
+          
+    - path: /etc/systemd/timesyncd.conf
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          [Time]
+          NTP=0.flatcar.pool.ntp.org 1.flatcar.pool.ntp.org 2.flatcar.pool.ntp.org 3.flatcar.pool.ntp.org
+    
+    - path: /etc/ntp.conf
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: |
+          server 0.flatcar.pool.ntp.org
+          server 1.flatcar.pool.ntp.org
+          server 2.flatcar.pool.ntp.org
+          server 3.flatcar.pool.ntp.org
+
+          # - Allow only time queries, at a limited rate.
+          # - Allow all local queries (IPv4, IPv6)
+          restrict default nomodify nopeer noquery limited kod
+          restrict 127.0.0.1
+          restrict [::1]
+          
+    - path: /etc/timezone
+      filesystem: root
+      mode: 0644
+      contents:
+        inline: Asia/Jakarta
+          
+    - path: /etc/profile.d/aliases.sh
+      filesystem: root
+      mode: 0755
+      contents:
+        inline: |
+          check-etcd () { /opt/bin/scripts/check_etcdv3_status.sh ; }
+          check-service () { /opt/bin/scripts/check_service_status.sh ; }
+          check-iptables () { /opt/bin/scripts/check_iptables_status.sh ; }
+          check-kubectl () { /opt/bin/scripts/check_kubectl_status.sh ; }
+          check-config () { /opt/bin/scripts/check_config.sh ; }
+          check-ipvsadm () { /opt/bin/scripts/check_ipvsadm_status.sh ; }
+          check-k8s () { /opt/bin/scripts/check_k8s_status.sh ; }
+          check-ceph () { /opt/bin/scripts/check_ceph_disk.sh ; }
+          sjf () { sudo journalctl -f ; }
+          dim () { docker images ; }
+          dps () { docker ps ; }
+          PATH=$PATH:/opt/bin
+    
+    - filesystem: "root"
+      path: "/etc/kubernetes/cni/net.d/99-loopback.conf" 
+      mode: 0644
+      contents:
+        inline: |
+          {
+             "cniVersion": "0.3.1",
+             "type": "loopback"
+          }
+          
+    - filesystem: "root"
+      path: "/etc/kubernetes/cni/net.d/10-containernet.conf"
+      mode: 0644
+      contents:
+        inline: |
+          {
+            "name": "podnet",
+            "type": "flannel",
+            "subnetFile": "/var/run/flannel/subnet.env",
+            "delegate": {
+               "bridge": "cni0",
+               "mtu": 1440,
+               "forceAddress": true,
+               "hairpinMode": true,
+               "isDefaultGateway": true
+            }
+          }
+          
+    - filesystem: "root"
+      path: "/etc/rkt/net.d/99-loopback.conf" 
+      mode: 0644
+      contents:
+        inline: |
+          {
+             "cniVersion": "0.3.1",
+             "type": "loopback"
+          }
+          
+    - filesystem: "root"
+      path: "/etc/rkt/net.d/10-containernet.conf"
+      mode: 0644
+      contents:
+        inline: |
+          {
+            "name": "podnet",
+            "type": "flannel",
+            "subnetFile": "/var/run/flannel/subnet.env",
+            "delegate": {
+               "bridge": "cni0",
+               "mtu": 1440,
+               "forceAddress": true,
+               "hairpinMode": true,
+               "isDefaultGateway": true
+            }
+          }
+    
+    - filesystem: "root"
+      path: "/etc/cni/net.d/99-loopback.conf" 
+      mode: 0644
+      contents:
+        inline: |
+          {
+             "cniVersion": "0.3.1",
+             "type": "loopback"
+          }
+          
+    - filesystem: "root"
+      path: "/etc/cni/net.d/10-containernet.conf"
+      mode: 0644
+      contents:
+        inline: |
+          {
+            "name": "podnet",
+            "type": "flannel",
+            "subnetFile": "/var/run/flannel/subnet.env",
+            "delegate": {
+               "bridge": "cni0",
+               "mtu": 1440,
+               "forceAddress": true,
+               "hairpinMode": true,
+               "isDefaultGateway": true
+            }
+          }
+          
+    - filesystem: "root"
+      path: "/etc/environment"
+      mode: 0644
+      contents:
+        inline: |
+          COREOS_PUBLIC_IPV4=10.9.56.102
+          COREOS_PRIVATE_IPV4=10.9.56.102
+          COREOS_HOSTNAME=manager-02.example.com
+          ETCD_SSL_DIR=/var/lib/etcd/ssl
+          ETCD_ENDPOINTS="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+          FLANNELD_ETCD_ENDPOINTS="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+          FLANNELD_IFACE="ens32"
+          FLANNELD_ETCD_PREFIX="/coreos.com/network2"
+          LOCKSMITHCTL_ETCD_CAFILE=/etc/ssl/certs/ca.pem
+          LOCKSMITHCTL_ETCD_CERTFILE=/var/lib/etcd/ssl/etcd-node.pem
+          LOCKSMITHCTL_ETCD_KEYFILE=/var/lib/etcd/ssl/etcd-node-key.pem
+          LOCKSMITHCTL_ENDPOINT="https://10.9.56.101:2379,https://10.9.56.102:2379,https://10.9.56.103:2379"
+          OCTANT_LISTENER_ADDR=0.0.0.0:8900
+          no_proxy=localhost,127.0.0.0/8,127.0.0.1,::1,10.9.56.101,10.9.56.102,10.9.56.103,manager-01,manager-02,manager-03,manager-01.example.com,manager-02.example.com,manager-03.example.com,example.com,/var/run/docker.sock
+          
+    - filesystem: "root"
+      path: "/etc/systemd/system.conf.d/10-default-env.conf"
+      mode: 0644
+      contents:
+        inline: |
+          [Manager]
+          DefaultEnvironment="localhost,127.0.0.0/8,127.0.0.1,::1,10.9.56.101,10.9.56.102,10.9.56.103,manager-01,manager-02,manager-03,manager-01.example.com,manager-02.example.com,manager-03.example.com,example.com,/var/run/docker.sock"
+    
+    - filesystem: "root"
+      path: "/root/.bashrc"
+      mode: 0655
+      contents:
+        inline: |
+          if [[ $- != *i* ]] ;then
+              return 
+          fi
+          
+          alias csysdig="docker run -i -t --rm --privileged -v /var/run/docker.sock:/host/var/run/docker.sock -v /dev:/host/dev -v /proc:/host/proc:ro sysdig/sysdig csysdig -pc"
+          alias sysdig="docker run -i -t --rm --privileged -v /var/run/docker.sock:/host/var/run/docker.sock -v /dev:/host/dev -v /proc:/host/proc:ro sysdig/sysdig sysdig"
+    
+    - filesystem: "root"
+      path: "/etc/ssl/certs/ca.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/var/lib/etcd/ssl/etcd-node.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/var/lib/etcd/ssl/etcd-node-key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
+    - filesystem: "root"
+      path: "/etc/coredns/tls/etcd/ca.crt"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/coredns/tls/etcd/cert.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN CERTIFICATE-----
+          -----END CERTIFICATE-----
+    - filesystem: "root"
+      path: "/etc/coredns/tls/etcd/key.pem"
+      mode: 0644
+      contents:
+        inline: |
+          -----BEGIN RSA PRIVATE KEY-----
+          -----END RSA PRIVATE KEY-----
